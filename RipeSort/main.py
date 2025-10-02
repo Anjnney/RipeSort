@@ -2,93 +2,93 @@
 import cv2
 import numpy as np
 
-def classify_fruit(frame, red_thresh=5000, green_thresh=5000):
+def classify_fruit(frame):
     """
-    Input: BGR frame
-    Returns: (label, green_mask, red_mask, red_count, green_count)
-    - label: "Apple (Ripe)", "Unripe/Green", or "Unknown"
-    - green_mask / red_mask: single-channel masks (0 or 255)
+    Detect multiple fruits based on HSV color segmentation.
+    Returns (label, masks_dict) where:
+    - label = detected fruit name(s)
+    - masks_dict = dictionary of masks for visualization
     """
+
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-    # --- Green range (typical green apples / unripe areas) ---
-    green_lower = np.array([35, 50, 40])
-    green_upper = np.array([85, 255, 255])
-    green_mask = cv2.inRange(hsv, green_lower, green_upper)
+    masks = {}
 
-    # --- Red range (ripe apple red) ---
+    # --- Apples (Ripe - Red) ---
     red_lower1 = np.array([0, 120, 70])
     red_upper1 = np.array([10, 255, 255])
     red_lower2 = np.array([170, 120, 70])
     red_upper2 = np.array([180, 255, 255])
-    red_mask1 = cv2.inRange(hsv, red_lower1, red_upper1)
-    red_mask2 = cv2.inRange(hsv, red_lower2, red_upper2)
-    red_mask = cv2.bitwise_or(red_mask1, red_mask2)
+    masks["Apple (Ripe)"] = cv2.inRange(hsv, red_lower1, red_upper1) | cv2.inRange(hsv, red_lower2, red_upper2)
 
-    # --- Morphological clean-up to remove noise ---
+    # --- Apples (Unripe - Green) ---
+    green_lower = np.array([35, 50, 40])
+    green_upper = np.array([85, 255, 255])
+    masks["Apple (Unripe)"] = cv2.inRange(hsv, green_lower, green_upper)
+
+    # --- Bananas (Yellow) ---
+    yellow_lower = np.array([20, 100, 100])
+    yellow_upper = np.array([35, 255, 255])
+    masks["Banana"] = cv2.inRange(hsv, yellow_lower, yellow_upper)
+
+    # --- Oranges (Orange) ---
+    orange_lower = np.array([10, 100, 100])
+    orange_upper = np.array([25, 255, 255])
+    masks["Orange"] = cv2.inRange(hsv, orange_lower, orange_upper)
+
+    # --- Watermelons (Dark Green shell + Red inside) ---
+    dark_green_lower = np.array([35, 80, 20])
+    dark_green_upper = np.array([85, 255, 100])
+    masks["Watermelon Shell"] = cv2.inRange(hsv, dark_green_lower, dark_green_upper)
+
+    masks["Watermelon Flesh"] = masks["Apple (Ripe)"].copy()  # reuse red detection
+
+    # Morphological cleaning
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-    green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_OPEN, kernel)
-    green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_CLOSE, kernel)
-    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
-    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
+    for key in masks:
+        masks[key] = cv2.morphologyEx(masks[key], cv2.MORPH_OPEN, kernel)
+        masks[key] = cv2.morphologyEx(masks[key], cv2.MORPH_CLOSE, kernel)
 
-    # --- Pixel counts ---
-    green_count = cv2.countNonZero(green_mask)
-    red_count = cv2.countNonZero(red_mask)
+    # Decide which fruits are present (based on pixel count)
+    detected = []
+    for fruit, mask in masks.items():
+        count = cv2.countNonZero(mask)
+        if count > 5000:  # threshold
+            detected.append(fruit)
 
-    # --- Simple decision logic ---
-    if red_count > red_thresh and red_count > green_count:
-        label = "Apple (Ripe)"
-    elif green_count > green_thresh and green_count > red_count:
-        label = "Unripe / Green"
-    else:
-        label = "Unknown"
+    if not detected:
+        detected.append("Unknown")
 
-    return label, green_mask, red_mask, red_count, green_count
+    return detected, masks
 
 
 def main():
-    cap = cv2.VideoCapture(0)  # change to filepath if you want to test a video file
+    cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("Error: cannot open camera")
+        print("Error: Cannot open camera")
         return
-
-    # window names
-    win_orig = "Original"
-    win_green = "Green Mask"
-    win_red = "Red Mask"
-    cv2.namedWindow(win_orig)
-    cv2.namedWindow(win_green)
-    cv2.namedWindow(win_red)
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        # optional: resize for faster processing (uncomment if needed)
-        # frame = cv2.resize(frame, (640, 480))
+        detected, masks = classify_fruit(frame)
 
-        label, green_mask, red_mask, red_count, green_count = classify_fruit(frame)
-
-        # overlay label and counts on the original frame
+        # Overlay results on frame
         overlay = frame.copy()
-        cv2.putText(overlay, f"{label}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2, cv2.LINE_AA)
-        cv2.putText(overlay, f"Red: {red_count}  Green: {green_count}", (10, 65),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(overlay, " + ".join(detected), (10, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
 
-        # show windows: original video + masks
-        cv2.imshow(win_orig, overlay)
-        cv2.imshow(win_green, green_mask)
-        cv2.imshow(win_red, red_mask)
+        # Show original + masks in separate windows
+        cv2.imshow("RipeSort - MultiFruit", overlay)
+
+        for i, (fruit, mask) in enumerate(masks.items()):
+            cv2.imshow(fruit, mask)
 
         key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):         # press 'q' to quit
+        if key == ord('q'):   # quit
             break
-        elif key == ord('s'):       # press 's' to save a snapshot (optional)
-            cv2.imwrite("snapshot.png", frame)
-            print("Saved snapshot.png")
 
     cap.release()
     cv2.destroyAllWindows()
